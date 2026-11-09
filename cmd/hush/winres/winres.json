@@ -1,0 +1,36 @@
+{
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": ["icon256.png", "icon48.png", "icon32.png", "icon16.png"]
+    }
+  },
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {"name": "hush", "version": "1.0.0.0"},
+        "description": "hush",
+        "minimum-os": "win10",
+        "execution-level": "as invoker",
+        "dpi-awareness": "system",
+        "use-common-controls-v6": true
+      }
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {"file_version": "1.0.0.0", "product_version": "1.0.0.0"},
+        "info": {
+          "0409": {
+            "CompanyName": "brix7on",
+            "FileDescription": "hush — headset bleed removal",
+            "FileVersion": "1.0.0",
+            "LegalCopyright": "© 2026 brix7on, MIT",
+            "ProductName": "hush",
+            "ProductVersion": "1.0.0"
+          }
+        }
+      }
+    }
+  }
+}
