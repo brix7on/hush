@@ -20,7 +20,7 @@ hush lives in the tray. Left click opens the panel, right click opens the menu.
 ## How it works
 
 1. **Capture.** hush reads the microphone and, in parallel, the sound that goes to your headphones (WASAPI loopback). Both streams are aligned on a common timeline.
-2. **Calibration.** A short noise burst reveals how strongly and with what delay the headphones leak into the mic. The result is saved and adjusted slowly while you use the program.
+2. **Learning.** hush learns how strongly and with what delay your headphones leak into the mic from whatever plays in them while you are silent, and keeps re-learning every few seconds. It works for any headset without tuning: a wrong or outdated model is replaced automatically. The short noise burst on first launch only gives a head start.
 3. **Suppression.** The leak is removed per frequency band by its envelope, so it works even when the bleed is not an exact copy of the headphone signal. Your own voice is detected and suppression softens while you speak.
 4. **Output.** The cleaned signal is written to the virtual cable. In exclusive mode the cable output bypasses the Windows mixer, so screen sharing does not pick up your voice twice.
 
@@ -82,7 +82,7 @@ hush работает из трея. Левый клик открывает па
 ## Как это работает
 
 1. **Захват.** hush читает микрофон и параллельно звук, который идёт в наушники (WASAPI loopback). Оба потока выравниваются на общей шкале времени.
-2. **Калибровка.** Короткий шум показывает, насколько сильно и с какой задержкой наушники попадают в микрофон. Результат сохраняется и понемногу уточняется во время работы.
+2. **Обучение.** hush сам выясняет, насколько сильно и с какой задержкой наушники попадают в микрофон, по тому, что в них играет, пока вы молчите, и переучивается каждые несколько секунд. Это работает с любой гарнитурой без настройки: неверная или устаревшая модель заменяется автоматически. Короткий шум при первом запуске нужен только для быстрого старта.
 3. **Подавление.** Наводка убирается по полосам частот по огибающей, поэтому работает и тогда, когда она не точная копия звука наушников. Собственный голос распознаётся, и пока вы говорите, подавление мягче.
 4. **Вывод.** Очищенный звук пишется в виртуальный кабель. В монопольном режиме вывод минует микшер Windows, и демонстрация экрана не захватывает ваш голос второй раз.
 

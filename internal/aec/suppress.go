@@ -94,6 +94,28 @@ type Suppressor struct {
 	sOut     float64
 	sDa, sOa float64
 	pub      pubStats
+
+	auto autoLearn
+}
+
+// ---------- самообучение по звуку наушников ----------
+
+const (
+	autoBuf   = 2400 // кадров истории, ~12.8 с
+	autoEvery = 940  // как часто пересчитывать, ~5 с
+	autoMin   = 900  // сколько нужно пригодных кадров
+)
+
+type autoLearn struct {
+	m, s    [][]float64
+	ok      []bool
+	lv      []float64
+	pos, n  int
+	since   int
+	busy    atomic.Bool
+	pending *Calib
+	pendCur float64
+	Off     bool
 }
 
 type pubStats struct{ mic, ref, out, vad, da, oa float64 }
@@ -147,6 +169,14 @@ func NewSuppressor(rate int) *Suppressor {
 	s.out = make([]float32, H)
 	s.cal = Calib{Rate: rate, W: make([]float64, s.nb)}
 	s.calDone = make(chan Calib, 1)
+	s.auto.m = make([][]float64, autoBuf)
+	s.auto.s = make([][]float64, autoBuf)
+	for i := range s.auto.m {
+		s.auto.m[i] = make([]float64, s.nb)
+		s.auto.s[i] = make([]float64, s.nb)
+	}
+	s.auto.ok = make([]bool, autoBuf)
+	s.auto.lv = make([]float64, autoBuf)
 	return s
 }
 
@@ -251,6 +281,10 @@ func (s *Suppressor) Process(ref, mic, out []float32) {
 		s.calS = s.calS[:0]
 	}
 	collecting := s.calLeft > 0
+	if p := s.auto.pending; p != nil && !collecting {
+		s.applyAuto(*p, s.auto.pendCur)
+		s.auto.pending = nil
+	}
 	cal := s.cal
 	s.mu.Unlock()
 
@@ -273,6 +307,7 @@ func (s *Suppressor) Process(ref, mic, out []float32) {
 		}
 	}
 
+	lvFrame := 0.0
 	{
 		var sm, sp float64
 		for b := 2; b <= 18 && b < s.nb; b++ {
@@ -286,6 +321,7 @@ func (s *Suppressor) Process(ref, mic, out []float32) {
 		ratio := sm / (sp + 1e-20)
 
 		lv := 10 * math.Log10(me+1e-14)
+		lvFrame = lv
 		switch {
 		case !s.bbInit:
 			s.bbFloor, s.bbInit = lv, true
@@ -316,6 +352,7 @@ func (s *Suppressor) Process(ref, mic, out []float32) {
 		s.vadRaw = raw
 	}
 	voice := s.vad
+	s.autoPush(re > 1e-6 && !collecting, lvFrame, cal)
 	betaEff := s.Beta() * (1 - 0.25*voice) // пока говоришь ты — подавляем мягче
 
 	// оценка наводки и усиления
@@ -559,3 +596,161 @@ func (s *Suppressor) Stats() SupStats {
 	}
 	return st
 }
+
+func (s *Suppressor) autoPush(usable bool, lv float64, cur Calib) {
+	a := &s.auto
+	if a.Off {
+		return
+	}
+	copy(a.m[a.pos], s.mb)
+	copy(a.s[a.pos], s.S)
+	a.ok[a.pos] = usable
+	a.lv[a.pos] = lv
+	a.pos = (a.pos + 1) % autoBuf
+	if a.n < autoBuf {
+		a.n++
+	}
+	a.since++
+	if a.since < autoEvery || a.busy.Load() {
+		return
+	}
+	cnt := 0
+	for i := 0; i < a.n; i++ {
+		if a.ok[i] {
+			cnt++
+		}
+	}
+	if cnt < autoMin {
+		return
+	}
+	a.since = 0
+	n := a.n
+	m := make([][]float64, n)
+	sv := make([][]float64, n)
+	ok := make([]bool, n)
+	var lvs []float64
+	start := (a.pos - n + autoBuf) % autoBuf
+	for i := 0; i < n; i++ {
+		j := (start + i) % autoBuf
+		m[i] = append([]float64(nil), a.m[j]...)
+		sv[i] = append([]float64(nil), a.s[j]...)
+		ok[i] = a.ok[j]
+		if ok[i] {
+			lvs = append(lvs, a.lv[j])
+		}
+	}
+	// голос заметно громче наводки: громкие кадры в обучение не берём
+	gate := pctl(lvs, 0.2) + 15
+	for i := 0; i < n; i++ {
+		if ok[i] && a.lv[(start+i)%autoBuf] > gate {
+			ok[i] = false
+		}
+	}
+	curD, curFound := cur.D, cur.Found
+	a.busy.Store(true)
+	go func() {
+		defer a.busy.Store(false)
+		c, curCorr := s.solveModel(m, sv, ok, curD)
+		if !c.Found {
+			return
+		}
+		if !curFound {
+			curCorr = -1
+		}
+		s.mu.Lock()
+		s.auto.pending, s.auto.pendCur = &c, curCorr
+		s.mu.Unlock()
+	}()
+}
+
+// applyAuto принимает модель, выученную по звуку наушников (вызывается под mu).
+func (s *Suppressor) applyAuto(c Calib, curCorr float64) {
+	switch {
+	case !s.cal.Found || c.Corr > curCorr+0.05:
+		c.W0 = append([]float64(nil), c.W...)
+		s.cal = c
+		s.w0 = append([]float64(nil), c.W...)
+		s.d0 = c.D
+		s.adapted = true
+	case c.D == s.cal.D:
+		s.w0 = append([]float64(nil), c.W...)
+		s.cal.W0 = append([]float64(nil), c.W...)
+	}
+}
+
+// solveModel ищет задержку и коэффициенты по пригодным кадрам; второе значение — качество текущей задержки.
+func (s *Suppressor) solveModel(m, sv [][]float64, ok []bool, curD int) (Calib, float64) {
+	c := Calib{Rate: s.Rate, W: make([]float64, s.nb)}
+	var idx []int
+	for t := supMaxD; t < len(m); t++ {
+		if ok[t] {
+			idx = append(idx, t)
+		}
+	}
+	if len(idx) < autoMin/2 {
+		return c, 0
+	}
+	lg := func(v float64) float64 { return math.Log10(v + 1e-14) }
+	lm := make([][]float64, s.nb)
+	ls := make([][]float64, s.nb)
+	for b := 0; b < s.nb; b++ {
+		lm[b] = make([]float64, len(m))
+		ls[b] = make([]float64, len(m))
+		for t := range m {
+			lm[b][t] = lg(m[t][b])
+			ls[b][t] = lg(sv[t][b])
+		}
+	}
+	x := make([]float64, len(idx))
+	y := make([]float64, len(idx))
+	corrAt := func(d int) float64 {
+		var sum float64
+		for b := 1; b < s.nb; b++ {
+			for i, t := range idx {
+				x[i], y[i] = lm[b][t], ls[b][t-d]
+			}
+			sum += corrF(x, y)
+		}
+		return sum / float64(s.nb-1)
+	}
+	bestD, bestC := 0, -1.0
+	for d := 0; d < supMaxD; d++ {
+		if v := corrAt(d); v > bestC {
+			bestC, bestD = v, d
+		}
+	}
+	cur := corrAt(curD)
+	c.D, c.Corr = bestD, bestC
+	var leakSum, nfSum float64
+	col := make([]float64, len(idx))
+	for b := 0; b < s.nb; b++ {
+		for i, t := range idx {
+			col[i] = m[t][b]
+		}
+		nf := pctl(col, 0.15)
+		var num, den, pred float64
+		for _, t := range idx {
+			xv := sv[t-bestD][b]
+			yv := m[t][b] - nf
+			if yv < 0 {
+				yv = 0
+			}
+			num += xv * yv
+			den += xv * xv
+		}
+		if den > 0 {
+			c.W[b] = num / den
+		}
+		for _, t := range idx {
+			pred += c.W[b] * sv[t-bestD][b]
+		}
+		leakSum += pred
+		nfSum += nf * float64(len(idx))
+	}
+	c.LeakDB = 10 * math.Log10((leakSum+nfSum)/(nfSum+1e-20))
+	c.Found = c.Corr > 0.3 && c.LeakDB > 1
+	return c, cur
+}
+
+// SetAutoLearn включает или выключает самообучение по звуку наушников.
+func (s *Suppressor) SetAutoLearn(on bool) { s.auto.Off = !on }
