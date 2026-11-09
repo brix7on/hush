@@ -3,7 +3,7 @@ name: release
 on:
   push:
     tags: ["v*"]
-    branches: [main]
+    branches: [main, rust]
   pull_request:
   workflow_dispatch:
 
@@ -16,27 +16,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+      - name: Toolchain
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          rustup target add x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Test
         run: |
-          go vet ./...
-          GOOS=windows GOARCH=amd64 go vet ./...
-          go test -race -short ./...
+          cargo test --release
+          cargo build --target x86_64-pc-windows-gnu
 
       - name: Build
         run: |
           v=dev
           case "$GITHUB_REF" in refs/tags/v*) v="${GITHUB_REF_NAME#v}" ;; esac
-          if [ "$v" != dev ]; then
-            go install github.com/tc-hib/go-winres@v0.3.3
-            (cd cmd/hush && "$(go env GOPATH)/bin/go-winres" make --in winres/winres.json --arch amd64 \
-              --product-version "$v.0" --file-version "$v.0")
-          fi
+          HUSH_VERSION="$v" cargo build --release --target x86_64-pc-windows-gnu
           mkdir -p dist
-          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-H=windowsgui -s -w -X main.Version=$v" -o dist/hush.exe ./cmd/hush
+          cp target/x86_64-pc-windows-gnu/release/hush.exe dist/hush.exe
 
       - name: Package
         run: |
@@ -58,7 +57,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" ./*.zip hush.exe SHA256SUMS \
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" ./*.zip hush.exe SHA256SUMS $pre \
             --title "hush ${GITHUB_REF_NAME#v}" \
             --notes "Скачайте \`hush.exe\` и запустите (или \`hush-…-windows-x64.zip\`, если браузер блокирует exe). Нужен бесплатный драйвер [VB-Cable](https://vb-audio.com/Cable/).
           Download and run \`hush.exe\` (or \`hush-…-windows-x64.zip\` if the browser blocks the exe). Requires the free [VB-Cable](https://vb-audio.com/Cable/) driver." \

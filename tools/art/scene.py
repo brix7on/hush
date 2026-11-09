@@ -1,4 +1,4 @@
-"""Фон панели: python3 scene.py пишет ../../cmd/hush/scene.png."""
+"""Фон панели: python3 scene.py пишет ../../assets/scene.png."""
 import numpy as np
 from PIL import Image
 W,H=600,580
@@ -58,4 +58,4 @@ B=np.block([[4*b4,4*b4+2],[4*b4+3,4*b4+1]])/64+1/128
 th=B[(y.astype(int))%8,(x.astype(int))%8]
 bit=g>th
 img=np.zeros((H,W,3),np.uint8); img[:]=INK; img[bit]=PAPER
-Image.fromarray((bit*255).astype(np.uint8)).convert('1').save('../../cmd/hush/scene.png',optimize=True)
+Image.fromarray((bit*255).astype(np.uint8)).convert('1').save('../../assets/scene.png',optimize=True)

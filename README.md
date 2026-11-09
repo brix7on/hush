@@ -49,7 +49,7 @@ Run `hush.exe -h` for the full list.
 
 ## Building from source
 
-Requires Go 1.24+. Run `./build.sh`: vet, tests with the race detector, then `dist/hush.exe`. The signal processing lives in `internal/` and is tested on any OS; the Windows part is in `cmd/hush`. Releases are built by GitHub Actions on every `v*` tag. Details are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Requires Rust 1.85+ with the `x86_64-pc-windows-gnu` target and MinGW-w64 (or build natively on Windows). Run `./build.sh`: tests, then `dist/hush.exe`. The signal processing and the panel drawing live in the library (`src/dsp`, `src/pipe`, `src/panel.rs`) and are tested on any OS; the Windows part is in `src/win`. Releases are built by GitHub Actions on every `v*` tag. Details are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## License
 
@@ -108,7 +108,7 @@ hush работает из трея. Левый клик открывает па
 
 ## Сборка из исходников
 
-Нужен Go 1.24+. Команда `./build.sh`: vet, тесты с детектором гонок, затем `dist/hush.exe`. Обработка звука лежит в `internal/` и тестируется на любой ОС; часть для Windows — в `cmd/hush`. Релизы собирает GitHub Actions на каждый тег `v*`. Подробности — в [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Нужен Rust 1.85+ с целью `x86_64-pc-windows-gnu` и MinGW-w64 (или сборка прямо в Windows). Команда `./build.sh`: тесты, затем `dist/hush.exe`. Обработка звука и отрисовка панели лежат в библиотеке (`src/dsp`, `src/pipe`, `src/panel.rs`) и тестируются на любой ОС; часть для Windows — в `src/win`. Релизы собирает GitHub Actions на каждый тег `v*`. Подробности — в [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Лицензия
 
