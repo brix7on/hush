@@ -5,9 +5,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -136,8 +139,14 @@ var (
 const panelClass = "HushPanel"
 
 // singleInstance: false — hush уже запущен; тогда просим его показать панель.
-func singleInstance(showOther bool) bool {
-	h, _, err := procCreateMutex.Call(0, 0, uintptr(unsafe.Pointer(u16(`Local\hush-single-instance`))))
+func singleInstance(showOther, wait bool) bool {
+	name := uintptr(unsafe.Pointer(u16(`Local\hush-single-instance`)))
+	h, _, err := procCreateMutex.Call(0, 0, name)
+	for i := 0; wait && h != 0 && err == syscall.ERROR_ALREADY_EXISTS && i < 50; i++ {
+		procCloseHandle.Call(h)
+		time.Sleep(200 * time.Millisecond)
+		h, _, err = procCreateMutex.Call(0, 0, name)
+	}
 	if h == 0 || err != syscall.ERROR_ALREADY_EXISTS {
 		return true
 	}
@@ -147,4 +156,19 @@ func singleInstance(showOther bool) bool {
 		}
 	}
 	return false
+}
+
+// restartAfterUpdate запускает новый exe с теми же ключами.
+func restartAfterUpdate(exe string) error {
+	args := []string{"-after-update"}
+	for _, a := range os.Args[1:] {
+		switch strings.TrimLeft(a, "-") {
+		case "background", "after-update":
+			continue
+		}
+		args = append(args, a)
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00000008} // DETACHED_PROCESS
+	return cmd.Start()
 }

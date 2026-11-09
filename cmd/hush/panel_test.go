@@ -56,3 +56,14 @@ func TestPanelPaint(t *testing.T) {
 	b, _ := json.Marshal(ops)
 	os.WriteFile(out+".json", b, 0o644)
 }
+
+func TestNewerVersion(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{{"v1.0.1", "1.0.0", true}, {"1.0.0", "1.0.0", false}, {"1.0.10", "1.0.9", true}, {"1.1", "1.0.5", true}, {"0.9", "1.0", false}} {
+		if newerVersion(c.a, c.b) != c.want {
+			t.Fatalf("%s > %s", c.a, c.b)
+		}
+	}
+}

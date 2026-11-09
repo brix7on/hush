@@ -32,6 +32,8 @@ The interface is available in English and Russian and follows the Windows langua
 
 Settings, calibration and the log (`hush-config.json`, `hush-calib.json`, `hush-log.txt`) are stored next to `hush.exe`. If that folder is read-only, `%LOCALAPPDATA%\hush` is used instead. Settings from the previous name of the program (`micaec-*`) are picked up automatically.
 
+hush checks GitHub Releases once an hour. When a new version is out, an **update** button appears next to the version on the panel and in the tray menu: the new `hush.exe` is downloaded, verified against `SHA256SUMS`, swapped in place and restarted.
+
 On first launch hush enables **Start with Windows** for the current user (no administrator rights needed). It can be turned off in the tray menu. Closing the panel keeps hush in the tray; **Quit** stops it.
 
 ## Command line
@@ -91,6 +93,8 @@ hush работает из трея. Левый клик открывает па
 ## Данные и автозапуск
 
 Настройки, калибровка и журнал (`hush-config.json`, `hush-calib.json`, `hush-log.txt`) хранятся рядом с `hush.exe`. Если в эту папку нельзя писать, используется `%LOCALAPPDATA%\hush`. Настройки прежней версии программы (`micaec-*`) подхватываются автоматически.
+
+Раз в час hush проверяет релизы на GitHub. Когда выходит новая версия, на панели рядом с номером версии и в меню трея появляется кнопка **обновить**: новый `hush.exe` скачивается, сверяется с `SHA256SUMS`, подменяет текущий и перезапускается.
 
 При первом запуске hush включает **Запуск вместе с Windows** для текущего пользователя (права администратора не нужны). Выключается в меню трея. Закрытая панель оставляет hush в трее; **Выход** завершает работу.
 

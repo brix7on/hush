@@ -1480,6 +1480,7 @@ func main() {
 	noui := flag.Bool("noui", false, L("без панели и значка в трее, только консоль", "no panel or tray icon, console only"))
 	background := flag.Bool("background", false, L("запуск в фоне, только значок в трее (так запускает автозапуск)", "start in the tray without the panel (used by autostart)"))
 	withConsole := flag.Bool("console", false, L("показывать консоль со строкой состояния", "show a console with live levels"))
+	afterUpdate := flag.Bool("after-update", false, L("служебный: запуск после обновления", "internal: start after an update"))
 	version := flag.Bool("version", false, L("показать версию и выйти", "print the version and exit"))
 	flag.CommandLine.Usage = func() {
 		useConsole(true)
@@ -1508,7 +1509,7 @@ func main() {
 	if needConsole {
 		useConsole(true)
 	}
-	if !*list && !*doctor && *record == 0 && os.Getenv("HUSH_UIDEMO") == "" && !singleInstance(!*background) {
+	if !*list && !*doctor && *record == 0 && os.Getenv("HUSH_UIDEMO") == "" && !singleInstance(!*background, *afterUpdate) {
 		return
 	}
 	procTimeBeginPeriod.Call(1)
@@ -1523,6 +1524,7 @@ func main() {
 	}
 	debug.SetMemoryLimit(300 << 20) // мягкий потолок: ближе к нему сборщик работает чаще
 	go memWatch()
+	go cleanupOldExe()
 	var fq int64
 	procQPF.Call(uintptr(unsafe.Pointer(&fq)))
 	qpcFreq = fq
@@ -1775,6 +1777,33 @@ func main() {
 			}
 		case "log":
 			openURL(dataFile("log.txt"))
+		case "update":
+			go func() {
+				exe, err := installUpdate(dataDir())
+				if err != nil {
+					logEvent("обновление: %v", err)
+					ui.Balloon(L("Обновление не удалось", "Update failed"), err.Error())
+					return
+				}
+				logEvent("обновлено до %s, перезапуск", updateState().Latest)
+				if err := restartAfterUpdate(exe); err != nil {
+					ui.Balloon(L("Обновление не удалось", "Update failed"), err.Error())
+					return
+				}
+				ui.send(action{Kind: "quit"})
+			}()
+		case "checkupd":
+			go func() {
+				tag, _, err := checkUpdate()
+				switch {
+				case err != nil:
+					ui.Balloon(appName, L("Не удалось проверить обновления: ", "Update check failed: ")+err.Error())
+				case tag != "":
+					ui.Balloon(appName, fmt.Sprintf(L("Доступна версия %s", "Version %s is available"), tag))
+				default:
+					ui.Balloon(appName, fmt.Sprintf(L("Установлена последняя версия (%s)", "You have the latest version (%s)"), Version))
+				}
+			}()
 		case "folder":
 			openURL(dataDir())
 		case "quit":
@@ -1800,6 +1829,8 @@ func main() {
 				OutStarves: int(outStarves.Load()), MicGlitches: int(micGlitches.Load()), MicOwnClock: micOwnClock.Load(), MicLossPct: float64(micLossPct.Load()) / 10, ExclWant: !*shared, ExclOn: exclActive.Load(), GainDB: amp.GainDB(), Limiting: amp.Limiting(), MicDB: -120, RefDB: -120, OutDB: -120,
 				Noise: dn.Strength(), EQ: eq.Preset(), AGC: agc.Enabled(), AGCGain: agc.GainDB(),
 				PTT: int(ptt.mode.Load()), PTTKey: keyName(int(ptt.key.Load())), PTTOpen: ptt.open.Load(), Binding: ptt.binding.Load(), Cue: cues.enabled.Load()}
+			u := updateState()
+			st.UpdLatest, st.UpdBusy, st.UpdMsg = u.Latest, u.Busy, u.Msg
 			nameMu.RLock()
 			st.Mic, st.Ref, st.Out = *micName, *refName, *outName
 			nameMu.RUnlock()
@@ -1817,6 +1848,16 @@ func main() {
 			}
 			return st
 		}, !*background)
+		go func() {
+			time.Sleep(20 * time.Second)
+			for {
+				if tag, fresh, err := checkUpdate(); err == nil && fresh {
+					logEvent("доступна версия %s", tag)
+					ui.Balloon(appName, fmt.Sprintf(L("Доступна версия %s. Обновить можно на панели или в меню.", "Version %s is available. Update from the panel or the menu."), tag))
+				}
+				time.Sleep(time.Hour)
+			}
+		}()
 	}
 
 	session := func(first bool, doCal, forceCal bool) (quit bool, startErr error) {

@@ -650,6 +650,13 @@ func (c *uiCtl) popup() {
 	add(menu, L("Запускать вместе с Windows", "Start with Windows"), action{Kind: "autostart"}, check(autostartOn()))
 	add(menu, fmt.Sprintf(L("Сон ПК при тишине (%d мин)", "Sleep on silence (%d min)"), idleSleepMin()), action{Kind: "idlesleep"}, check(idleSleepOn.Load()))
 	add(menu, L("Открыть журнал", "Open log"), action{Kind: "log"}, 0)
+	switch {
+	case st.UpdBusy:
+	case st.UpdLatest != "":
+		add(menu, fmt.Sprintf(L("Обновить до %s", "Update to %s"), st.UpdLatest), action{Kind: "update"}, 0)
+	default:
+		add(menu, L("Проверить обновления", "Check for updates"), action{Kind: "checkupd"}, 0)
+	}
 	sep(menu)
 	add(menu, L("Выход", "Quit"), action{Kind: "quit"}, 0)
 

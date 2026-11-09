@@ -13,6 +13,7 @@ cmd/hush/              программа для Windows
   lang.go              язык интерфейса: L("рус", "eng")
   ptt_windows.go       микрофон по кнопке и звуковые сигналы
   power_windows.go     сон ПК при долгой тишине
+  update.go            самообновление: релиз GitHub → hush.exe + SHA256SUMS → подмена через .old → -after-update
   doctor_windows.go    режим -doctor: откуда берётся эхо
   winres/              значок, манифест и сведения о версии exe
 internal/aec/          подавитель наводки, адаптивный фильтр, шумодав, БПФ

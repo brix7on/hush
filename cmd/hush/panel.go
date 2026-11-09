@@ -42,6 +42,8 @@ type uiState struct {
 	MicLossPct          float64
 	Mic, Ref, Out       string
 	Note                string
+	UpdLatest, UpdMsg   string
+	UpdBusy             bool
 }
 
 // action — просьба интерфейса к основной программе.
@@ -246,7 +248,23 @@ func paintPanel(c *canvas, st uiState, hov point, blink bool) ([]hitBox, []textO
 	head := rect{16, 14, 364, 52}
 	c.box(head)
 	text(rect{28, 14, 240, 52}, "H U S H", false, fontTitle, dtVCenter)
-	text(rect{200, 14, 352, 52}, Version, false, fontSmall, dtVCenter|dtRight)
+	switch {
+	case st.UpdBusy:
+		text(rect{180, 14, 352, 52}, st.UpdMsg, false, fontSmall, dtVCenter|dtRight)
+	case st.UpdLatest != "":
+		r := rect{212, 20, 356, 46}
+		hot := r.has(hov)
+		c.fill(r, cPaper)
+		if hot {
+			c.fill(r, cInk)
+			c.frame(r, cPaper)
+			tip = fmt.Sprintf(L("Скачать и установить %s, hush перезапустится", "Download and install %s, hush will restart"), st.UpdLatest)
+		}
+		text(r, fmt.Sprintf(L("обновить до %s", "update to %s"), st.UpdLatest), !hot, fontSmall, dtVCenter|dtCenter)
+		hits = append(hits, hitBox{r, action{Kind: "update"}, ""})
+	default:
+		text(rect{200, 14, 352, 52}, Version, false, fontSmall, dtVCenter|dtRight)
+	}
 
 	// состояние
 	stat := rect{16, 60, 364, 96}
