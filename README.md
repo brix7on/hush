@@ -6,21 +6,18 @@
 
 Removes headphone bleed from a headset microphone on Windows. Whatever plays in your headphones leaks into the mic, and the people you talk to hear themselves. hush measures that leak once, subtracts it in real time and passes the clean voice to a virtual cable that Discord, OBS or any other program uses as the microphone.
 
-<p align="center"><img src="docs/panel.png" width="600" alt="hush panel"></p>
-
 ## Quick start
 
 1. Install the free [VB-Cable](https://vb-audio.com/Cable/) driver (run `VBCABLE_Setup_x64.exe` as administrator and click **Install Driver**).
 2. Download `hush.exe` from [Releases](../../releases/latest) and run it. No installation is needed.
-3. Stay quiet for about 7 seconds while hush plays a short noise into your headphones. This is the one-time calibration.
-4. In Discord (or any other program) choose **CABLE Output** as the microphone.
+3. In Discord (or any other program) choose **CABLE Output** as the microphone.
 
 hush lives in the tray. Left click opens the panel, right click opens the menu.
 
 ## How it works
 
 1. **Capture.** hush reads the microphone and, in parallel, the sound that goes to your headphones (WASAPI loopback). Both streams are aligned on a common timeline.
-2. **Learning.** hush learns how strongly and with what delay your headphones leak into the mic from whatever plays in them while you are silent, and keeps re-learning every few seconds. It works for any headset without tuning: a wrong or outdated model is replaced automatically. The short noise burst on first launch only gives a head start.
+2. **Learning.** hush learns how strongly and with what delay your headphones leak into the mic from whatever plays in them while you are silent, and keeps re-learning every few seconds. It works for any headset without tuning: a wrong or outdated model is replaced automatically. A manual calibration with a short noise burst is available from the panel.
 3. **Suppression.** The leak is removed per frequency band by its envelope, so it works even when the bleed is not an exact copy of the headphone signal. Your own voice is detected and suppression softens while you speak.
 4. **Output.** The cleaned signal is written to the virtual cable. In exclusive mode the cable output bypasses the Windows mixer, so screen sharing does not pick up your voice twice.
 
@@ -42,7 +39,7 @@ On first launch hush enables **Start with Windows** for the current user (no adm
 |---|---|
 | `-list` | list audio devices |
 | `-mic`, `-ref`, `-out` | part of a device name for the mic, headphones and output |
-| `-recal` | calibrate again on start |
+| `-recal` | calibrate with a noise burst on start |
 | `-doctor` | find where an echo comes from |
 | `-record N` | record N seconds of mic and headphones to `hush-rec.zip` |
 | `-console` | show a console with live levels |
@@ -68,21 +65,18 @@ MIT. Third-party code: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). VB-Cabl
 
 Убирает из микрофона гарнитуры наводку от наушников в Windows. Всё, что играет в наушниках, просачивается в микрофон, и собеседники слышат сами себя. hush один раз измеряет эту наводку, вычитает её на лету и отдаёт чистый голос в виртуальный кабель, который Discord, OBS или любая другая программа берёт как микрофон.
 
-<p align="center"><img src="docs/panel.png" width="600" alt="Панель hush"></p>
-
 ## Быстрый старт
 
 1. Установите бесплатный драйвер [VB-Cable](https://vb-audio.com/Cable/): запустите `VBCABLE_Setup_x64.exe` от имени администратора и нажмите **Install Driver**.
 2. Скачайте `hush.exe` из [Releases](../../releases/latest) и запустите. Установка не нужна.
-3. Помолчите около 7 секунд, пока hush проигрывает короткий шум в наушники. Это калибровка, она нужна один раз.
-4. В Discord (или другой программе) выберите микрофоном **CABLE Output**.
+3. В Discord (или другой программе) выберите микрофоном **CABLE Output**.
 
 hush работает из трея. Левый клик открывает панель, правый клик открывает меню.
 
 ## Как это работает
 
 1. **Захват.** hush читает микрофон и параллельно звук, который идёт в наушники (WASAPI loopback). Оба потока выравниваются на общей шкале времени.
-2. **Обучение.** hush сам выясняет, насколько сильно и с какой задержкой наушники попадают в микрофон, по тому, что в них играет, пока вы молчите, и переучивается каждые несколько секунд. Это работает с любой гарнитурой без настройки: неверная или устаревшая модель заменяется автоматически. Короткий шум при первом запуске нужен только для быстрого старта.
+2. **Обучение.** hush сам выясняет, насколько сильно и с какой задержкой наушники попадают в микрофон, по тому, что в них играет, пока вы молчите, и переучивается каждые несколько секунд. Это работает с любой гарнитурой без настройки: неверная или устаревшая модель заменяется автоматически. Ручная калибровка коротким шумом доступна на панели.
 3. **Подавление.** Наводка убирается по полосам частот по огибающей, поэтому работает и тогда, когда она не точная копия звука наушников. Собственный голос распознаётся, и пока вы говорите, подавление мягче.
 4. **Вывод.** Очищенный звук пишется в виртуальный кабель. В монопольном режиме вывод минует микшер Windows, и демонстрация экрана не захватывает ваш голос второй раз.
 
@@ -104,7 +98,7 @@ hush работает из трея. Левый клик открывает па
 |---|---|
 | `-list` | показать звуковые устройства |
 | `-mic`, `-ref`, `-out` | часть названия микрофона, наушников и вывода |
-| `-recal` | заново откалибровать при запуске |
+| `-recal` | откалибровать шумом при запуске |
 | `-doctor` | найти, откуда берётся эхо |
 | `-record N` | записать N секунд микрофона и наушников в `hush-rec.zip` |
 | `-console` | показать консоль с уровнями |

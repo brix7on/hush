@@ -67,3 +67,16 @@ func TestNewerVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestPanelPaintLarge(t *testing.T) {
+	cv := newCanvas(1920, 1080)
+	hits, _ := paintPanel(cv, demoState(), point{-1, -1}, true)
+	if len(hits) < 20 || cv.oy <= 0 || cv.ox <= 0 {
+		t.Fatalf("hits %d offset %d,%d", len(hits), cv.ox, cv.oy)
+	}
+	for _, v := range cv.px {
+		if v != cInk && v != cPaper {
+			t.Fatalf("third color %06x", v)
+		}
+	}
+}

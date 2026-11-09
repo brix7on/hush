@@ -1395,7 +1395,7 @@ func recordMode(secs int, micName, refName string) {
 	}
 	half := secs / 2
 	fmt.Println()
-	fmt.Printf("СЕЙЧАС (первые %d с): включи музыку/видео ГРОМКО, как обычно играешь, и МОЛЧИ.\n", half)
+	fmt.Printf(L("СЕЙЧАС (первые %d с): включи музыку/видео ГРОМКО, как обычно играешь, и МОЛЧИ.\n", "NOW (first %d s): play music or a video at your usual volume and STAY QUIET.\n"), half)
 	start := time.Now()
 	phase2 := false
 	for time.Since(start) < time.Duration(secs)*time.Second {
@@ -1409,13 +1409,13 @@ func recordMode(secs int, micName, refName string) {
 		el := int(time.Since(start).Seconds())
 		if !phase2 && el >= half {
 			phase2 = true
-			fmt.Printf("\nТЕПЕРЬ (ещё %d с): музыка продолжает играть, а ты ГОВОРИ в микрофон — читай что-нибудь вслух.\n", secs-half)
+			fmt.Printf(L("\nТЕПЕРЬ (ещё %d с): музыка продолжает играть, а ты ГОВОРИ в микрофон — читай что-нибудь вслух.\n", "\nNOW (another %d s): keep the music playing and TALK into the mic, read something aloud.\n"), secs-half)
 		}
-		fmt.Printf("\r  %2d / %d с   ", el, secs)
+		fmt.Printf(L("\r  %2d / %d с   ", "\r  %2d / %d s   "), el, secs)
 	}
 	stop.Store(true)
 	wg.Wait()
-	fmt.Println("\nГотово, сохраняю...")
+	fmt.Println(L("\nГотово, сохраняю...", "\nDone, saving..."))
 
 	chans, notes, err := pipe.Extract(micS, refS, pipe.IdxFromQPC(nowQPC(), t0))
 	if err != nil {
@@ -1428,12 +1428,12 @@ func recordMode(secs int, micName, refName string) {
 	path := dataFile("rec.zip")
 	fz, err := os.Create(path)
 	if err != nil {
-		fatal("не могу создать %s: %v", path, err)
+		fatal(L("не могу создать %s: %v", "cannot create %s: %v"), path, err)
 	}
 	zw := zip.NewWriter(fz)
 	w, _ := zw.CreateHeader(&zip.FileHeader{Name: "rec.wav", Method: zip.Deflate})
 	if err := audio.WriteWAV24(w, pipe.Rate, chans); err != nil {
-		fatal("запись WAV: %v", err)
+		fatal(L("запись WAV: %v", "writing WAV: %v"), err)
 	}
 	w, _ = zw.CreateHeader(&zip.FileHeader{Name: "info.txt", Method: zip.Deflate})
 	w.Write(info.Bytes())
@@ -1444,7 +1444,7 @@ func recordMode(secs int, micName, refName string) {
 	st, _ := os.Stat(path)
 	fmt.Println()
 	fmt.Print(info.String())
-	fmt.Printf("\nФайл: %s (%.1f МБ)\nПришли его мне. Нажми Enter, чтобы закрыть окно...\n", path, float64(st.Size())/1e6)
+	fmt.Printf(L("\nФайл: %s (%.1f МБ)\nПриложи его к issue на GitHub. Нажми Enter, чтобы закрыть окно...\n", "\nFile: %s (%.1f MB)\nAttach it to a GitHub issue. Press Enter to close...\n"), path, float64(st.Size())/1e6)
 	bufio.NewReader(os.Stdin).ReadString('\n')
 }
 
@@ -2114,11 +2114,11 @@ func calibrate(sup *aec.Suppressor, refName string, force bool, errCh chan error
 			var c aec.Calib
 
 			if json.Unmarshal(b, &c) == nil && c.Found && sup.SetCalib(c) {
-				fmt.Printf("Калибровка загружена: наводка с задержкой %.0f мс (перекалибровать: -recal)\n",
+				fmt.Printf("Калибровка загружена: наводка с задержкой %.0f мс\n",
 					float64(c.D*sup.H)*1000/float64(sup.Rate))
-				return nil
 			}
 		}
+		return nil // без файла модель выучится сама по звуку наушников
 	}
 	dev, name, err := pickDevice(wca.ERender, refName, L("наушники", "headphones"))
 	if err != nil {

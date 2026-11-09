@@ -70,6 +70,8 @@ var (
 	pSetStretchBltMode     = g32.NewProc("SetStretchBltMode")
 	pGdiFlush              = g32.NewProc("GdiFlush")
 	pDwmSetWindowAttribute = dwm.NewProc("DwmSetWindowAttribute")
+	pGetClientRect         = u32.NewProc("GetClientRect")
+	pFillRect              = u32.NewProc("FillRect")
 )
 
 const (
@@ -109,6 +111,11 @@ const (
 	wsCaption     = 0x00C00000
 	wsSysMenu     = 0x00080000
 	wsMinimizeBox = 0x00020000
+	wsMaximizeBox = 0x00010000
+	wsThickFrame  = 0x00040000
+
+	wmSize          = 0x0005
+	wmGetMinMaxInfo = 0x0024
 )
 
 type wndClassEx struct {
@@ -196,15 +203,24 @@ type uiCtl struct {
 	scale    int32
 	hits     []hitBox
 	frame    int
+	minW     int32
+	minH     int32
+	drawS    int32
+	ox, oy   int32
 
 	memDC   uintptr
 	dib     uintptr
+	oldBmp  uintptr
 	cv      *canvas
+	inkBr   uintptr
 	fonts   [fontCount]uintptr
 	taskMsg uint32
 }
 
 var theUI *uiCtl
+
+// ptrFrom превращает указатель из сообщения окна в unsafe.Pointer.
+func ptrFrom(p uintptr) unsafe.Pointer { return *(*unsafe.Pointer)(unsafe.Pointer(&p)) }
 
 func u16(s string) *uint16 { p, _ := syscall.UTF16PtrFromString(s); return p }
 
@@ -249,7 +265,11 @@ func (c *uiCtl) loop(showPanel bool) {
 		return uint32(r)
 	}()
 
-	style := uintptr(wsCaption | wsSysMenu | wsMinimizeBox)
+	style := uintptr(wsCaption | wsSysMenu | wsMinimizeBox | wsMaximizeBox | wsThickFrame)
+	mr := rect{0, 0, panelW, panelH}
+	pAdjustWindowRect.Call(uintptr(unsafe.Pointer(&mr)), style, 0)
+	c.minW, c.minH = mr.R-mr.L, mr.B-mr.T
+	c.inkBr = bg
 	wr := rect{0, 0, panelW * c.scale, panelH * c.scale}
 	pAdjustWindowRect.Call(uintptr(unsafe.Pointer(&wr)), style, 0)
 	w, h := wr.R-wr.L, wr.B-wr.T
@@ -429,6 +449,15 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		return 0
 	case wmEraseBkgnd:
 		return 1
+	case wmSize:
+		pInvalidateRect.Call(hwnd, 0, 0)
+		return 0
+	case wmGetMinMaxInfo:
+		if c != nil && c.minW > 0 {
+			mm := (*[10]int32)(ptrFrom(lp)) // MINMAXINFO: ptMinTrackSize = [6],[7]
+			mm[6], mm[7] = c.minW, c.minH
+		}
+		return 0
 	case 0x0218: // WM_POWERBROADCAST: выход из сна
 		if wp == 7 || wp == 18 {
 			c.send(action{Kind: "resume"})
@@ -457,7 +486,8 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		}
 		return 0
 	case wmLButtonDown:
-		p := point{int32(int16(lp&0xFFFF)) / c.scale, int32(int16((lp>>16)&0xFFFF)) / c.scale}
+		s := max(c.drawS, 1)
+		p := point{int32(int16(lp&0xFFFF))/s - c.ox, int32(int16((lp>>16)&0xFFFF))/s - c.oy}
 		for _, h := range c.hits {
 			if h.r.has(p) {
 				c.doAction(h.act)
@@ -517,27 +547,37 @@ func mkFont(face string, h int, bold bool) uintptr {
 	return f
 }
 
-func (c *uiCtl) ensureSurface(hdc uintptr) bool {
-	if c.memDC != 0 {
+func (c *uiCtl) ensureSurface(hdc uintptr, w, h int) bool {
+	if c.memDC != 0 && c.cv != nil && c.cv.w == w && c.cv.h == h {
 		return true
 	}
-	hdr := bitmapInfoHeader{Size: uint32(unsafe.Sizeof(bitmapInfoHeader{})), Width: panelW, Height: -panelH, Planes: 1, Bits: 32}
+	hdr := bitmapInfoHeader{Size: uint32(unsafe.Sizeof(bitmapInfoHeader{})), Width: int32(w), Height: int32(-h), Planes: 1, Bits: 32}
 	var bits unsafe.Pointer
 	dib, _, _ := pCreateDIBSection.Call(hdc, uintptr(unsafe.Pointer(&hdr)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
 	if dib == 0 || bits == nil {
 		return false
 	}
-	dc, _, _ := pCreateCompatDC.Call(hdc)
-	pSelectObject.Call(dc, dib)
-	c.memDC, c.dib = dc, dib
-	c.cv = &canvas{w: panelW, h: panelH, px: unsafe.Slice((*uint32)(bits), panelW*panelH)}
+	if c.memDC == 0 {
+		c.memDC, _, _ = pCreateCompatDC.Call(hdc)
+		pSetBkMode.Call(c.memDC, 1)
+	}
+	old, _, _ := pSelectObject.Call(c.memDC, dib)
+	if c.dib != 0 {
+		pDeleteObject.Call(c.dib)
+	} else {
+		c.oldBmp = old
+	}
+	c.dib = dib
+	c.cv = &canvas{w: w, h: h, px: unsafe.Slice((*uint32)(bits), w*h)}
+	if c.fonts[0] != 0 {
+		return true
+	}
 	c.fonts = [fontCount]uintptr{
 		mkFont("Courier New", 22, true),
 		mkFont("Segoe UI", 16, false),
 		mkFont("Segoe UI", 13, false),
 		mkFont("Courier New", 14, true),
 	}
-	pSetBkMode.Call(dc, 1)
 	return true
 }
 
@@ -545,20 +585,27 @@ func (c *uiCtl) paint(hwnd uintptr) {
 	var ps paintStruct
 	hdc, _, _ := pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 	defer pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-	if !c.ensureSurface(hdc) {
+	var cr rect
+	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&cr)))
+	cw, ch := max(cr.R, 1), max(cr.B, 1)
+	s := max(1, min(cw/panelW, ch/panelH))
+	bw, bh := max(cw/s, panelW), max(ch/s, panelH)
+	if !c.ensureSurface(hdc, int(bw), int(bh)) {
 		return
 	}
+	c.drawS = s
 	c.mu.Lock()
 	st := c.st
 	c.mu.Unlock()
 	var cp point
 	pGetCursorPos.Call(uintptr(unsafe.Pointer(&cp)))
 	pScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&cp)))
-	cp.X, cp.Y = cp.X/c.scale, cp.Y/c.scale
+	cp.X, cp.Y = cp.X/s-c.ox, cp.Y/s-c.oy
 
 	pGdiFlush.Call()
 	hits, texts := paintPanel(c.cv, st, cp, c.frame/4%2 == 0)
 	c.hits = hits
+	c.ox, c.oy = int32(c.cv.ox), int32(c.cv.oy)
 	for _, t := range texts {
 		col := cPaper
 		if t.ink {
@@ -567,12 +614,20 @@ func (c *uiCtl) paint(hwnd uintptr) {
 		pSelectObject.Call(c.memDC, c.fonts[t.font])
 		pSetTextColor.Call(c.memDC, colorRef(col))
 		u, _ := syscall.UTF16FromString(t.s)
-		r := t.r
+		r := rect{t.r.L + c.ox, t.r.T + c.oy, t.r.R + c.ox, t.r.B + c.oy}
 		pDrawText.Call(c.memDC, uintptr(unsafe.Pointer(&u[0])), uintptr(len(u)-1), uintptr(unsafe.Pointer(&r)), uintptr(t.flags))
 	}
 	pGdiFlush.Call()
 	pSetStretchBltMode.Call(hdc, 3) // COLORONCOLOR
-	pStretchBlt.Call(hdc, 0, 0, uintptr(panelW*c.scale), uintptr(panelH*c.scale), c.memDC, 0, 0, panelW, panelH, 0x00CC0020)
+	pStretchBlt.Call(hdc, 0, 0, uintptr(bw*s), uintptr(bh*s), c.memDC, 0, 0, uintptr(bw), uintptr(bh), 0x00CC0020)
+	if bw*s < cw {
+		r := rect{bw * s, 0, cw, ch}
+		pFillRect.Call(hdc, uintptr(unsafe.Pointer(&r)), c.inkBr)
+	}
+	if bh*s < ch {
+		r := rect{0, bh * s, cw, ch}
+		pFillRect.Call(hdc, uintptr(unsafe.Pointer(&r)), c.inkBr)
+	}
 }
 
 // ---------- меню в трее ----------

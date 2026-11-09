@@ -97,7 +97,7 @@ func noteOf(st uiState) string {
 	case st.Calibrating:
 		return L("калибровка", "calibrating")
 	case !st.Found:
-		return L("наводка не найдена", "no bleed detected")
+		return L("подстройка под гарнитуру", "learning the headset")
 	case st.Voice:
 		return L("говоришь", "speaking")
 	}
@@ -115,13 +115,15 @@ const (
 )
 
 type canvas struct {
-	w, h int
-	px   []uint32
+	w, h   int
+	px     []uint32
+	ox, oy int // где на холсте стоит колонка панели
 }
 
 func newCanvas(w, h int) *canvas { return &canvas{w: w, h: h, px: make([]uint32, w*h)} }
 
 func (c *canvas) set(x, y int, col uint32) {
+	x, y = x+c.ox, y+c.oy
 	if x >= 0 && y >= 0 && x < c.w && y < c.h {
 		c.px[y*c.w+x] = col
 	}
@@ -219,13 +221,24 @@ func loadScene() {
 	}
 }
 
+// scene заливает весь холст фоном: целое увеличение по высоте, справа внизу, слева повторяется край неба.
 func (c *canvas) scene() {
 	loadScene()
-	for i := range c.px {
-		if i < len(sceneMask) && sceneMask[i] {
-			c.px[i] = cPaper
-		} else {
-			c.px[i] = cInk
+	k := max(1, (c.h+panelH-1)/panelH)
+	x0, y0 := c.w-panelW*k, c.h-panelH*k
+	for y := 0; y < c.h; y++ {
+		sy := (y - y0) / k
+		row := c.px[y*c.w : (y+1)*c.w]
+		for x := range row {
+			sx := (x - x0) / k
+			if x < x0 {
+				sx = ((x-x0)/k%64 + 64) % 64
+			}
+			if sy >= 0 && sx < panelW && sy < panelH && sceneMask[sy*panelW+sx] {
+				row[x] = cPaper
+			} else {
+				row[x] = cInk
+			}
 		}
 	}
 }
@@ -241,6 +254,10 @@ func paintPanel(c *canvas, st uiState, hov point, blink bool) ([]hitBox, []textO
 	tip := ""
 	text := func(r rect, s string, ink bool, font int, flags uint32) {
 		texts = append(texts, textOp{r, s, ink, font, flags | dtSingle})
+	}
+	c.ox, c.oy = 0, max(0, (c.h-panelH)/2)
+	if extra := c.w - panelW; extra > 0 {
+		c.ox = min(extra, c.w/25)
 	}
 	c.scene()
 
@@ -317,7 +334,7 @@ func paintPanel(c *canvas, st uiState, hov point, blink bool) ([]hitBox, []textO
 	case st.Calibrating:
 		line = L("Не говори, идёт калибровка", "Stay quiet, calibrating")
 	case !st.Found:
-		line = L("Наводка не найдена", "No bleed detected")
+		line = L("Включи звук в наушниках, hush подстроится", "Play something in the headphones to let hush adapt")
 	case st.RefDB < -80:
 		line = L("В наушниках тихо", "Headphones are silent")
 	default:
