@@ -224,6 +224,8 @@ type appConfig struct {
 	IdleSleepMin int     `json:"idle_sleep_min,omitempty"` // через сколько минут тишины спать (по умолчанию 15)
 }
 
+const maxGainDB = 45
+
 var nameMu sync.RWMutex
 
 func idleSleepMin() int {
@@ -363,7 +365,7 @@ func gainKeys(amp *pipe.Amp) {
 			default:
 				continue
 			}
-			g = math.Max(-10, math.Min(30, g))
+			g = math.Max(-10, math.Min(maxGainDB, g))
 			amp.SetGainDB(g)
 			updateConfig(func(c *appConfig) { c.GainDB = g })
 		}
@@ -1664,7 +1666,7 @@ func main() {
 	handleAction := func(a action, quit *bool) bool {
 		switch a.Kind {
 		case "gain":
-			g := math.Max(-10, math.Min(30, amp.GainDB()+a.F))
+			g := math.Max(-10, math.Min(maxGainDB, amp.GainDB()+a.F))
 			amp.SetGainDB(g)
 			updateConfig(func(c *appConfig) { c.GainDB = g })
 		case "beta":

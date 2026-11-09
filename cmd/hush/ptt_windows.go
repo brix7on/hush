@@ -132,25 +132,25 @@ func (p *pttCtl) loop() {
 func keyName(vk int) string {
 	switch vk {
 	case 0:
-		return "не назначена"
+		return L("не назначена", "not set")
 	case 4:
-		return "мышь: колёсико"
+		return "Mouse 3"
 	case 5:
-		return "мышь: назад"
+		return "Mouse 4"
 	case 6:
-		return "мышь: вперёд"
+		return "Mouse 5"
 	case 0xA0:
-		return "левый Shift"
+		return "LShift"
 	case 0xA1:
-		return "правый Shift"
+		return "RShift"
 	case 0xA2:
-		return "левый Ctrl"
+		return "LCtrl"
 	case 0xA3:
-		return "правый Ctrl"
+		return "RCtrl"
 	case 0xA4:
-		return "левый Alt"
+		return "LAlt"
 	case 0xA5:
-		return "правый Alt"
+		return "RAlt"
 	case 0x14:
 		return "Caps Lock"
 	}
@@ -170,7 +170,7 @@ func keyName(vk int) string {
 			return syscall.UTF16ToString(buf[:n])
 		}
 	}
-	return fmt.Sprintf("клавиша %d", vk)
+	return fmt.Sprintf("Key %d", vk)
 }
 
 // cueSamples — сигнал: включение — «бульк» вверх, выключение — «бульк» вниз.
