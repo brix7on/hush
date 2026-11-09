@@ -66,12 +66,10 @@ var (
 	pDeleteDC              = g32.NewProc("DeleteDC")
 	pCreateBitmap          = g32.NewProc("CreateBitmap")
 	pCreateDIBSection      = g32.NewProc("CreateDIBSection")
-	pStretchBlt            = g32.NewProc("StretchBlt")
-	pSetStretchBltMode     = g32.NewProc("SetStretchBltMode")
+	pBitBlt                = g32.NewProc("BitBlt")
 	pGdiFlush              = g32.NewProc("GdiFlush")
 	pDwmSetWindowAttribute = dwm.NewProc("DwmSetWindowAttribute")
 	pGetClientRect         = u32.NewProc("GetClientRect")
-	pFillRect              = u32.NewProc("FillRect")
 )
 
 const (
@@ -205,14 +203,12 @@ type uiCtl struct {
 	frame    int
 	minW     int32
 	minH     int32
-	drawS    int32
-	ox, oy   int32
+	fontF    float64
 
 	memDC   uintptr
 	dib     uintptr
 	oldBmp  uintptr
 	cv      *canvas
-	inkBr   uintptr
 	fonts   [fontCount]uintptr
 	taskMsg uint32
 }
@@ -269,7 +265,6 @@ func (c *uiCtl) loop(showPanel bool) {
 	mr := rect{0, 0, panelW, panelH}
 	pAdjustWindowRect.Call(uintptr(unsafe.Pointer(&mr)), style, 0)
 	c.minW, c.minH = mr.R-mr.L, mr.B-mr.T
-	c.inkBr = bg
 	wr := rect{0, 0, panelW * c.scale, panelH * c.scale}
 	pAdjustWindowRect.Call(uintptr(unsafe.Pointer(&wr)), style, 0)
 	w, h := wr.R-wr.L, wr.B-wr.T
@@ -486,8 +481,10 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		}
 		return 0
 	case wmLButtonDown:
-		s := max(c.drawS, 1)
-		p := point{int32(int16(lp&0xFFFF))/s - c.ox, int32(int16((lp>>16)&0xFFFF))/s - c.oy}
+		if c.cv == nil {
+			return 0
+		}
+		p := c.cv.toPanel(int32(int16(lp&0xFFFF)), int32(int16((lp>>16)&0xFFFF)))
 		for _, h := range c.hits {
 			if h.r.has(p) {
 				c.doAction(h.act)
@@ -568,17 +565,28 @@ func (c *uiCtl) ensureSurface(hdc uintptr, w, h int) bool {
 		c.oldBmp = old
 	}
 	c.dib = dib
-	c.cv = &canvas{w: w, h: h, px: unsafe.Slice((*uint32)(bits), w*h)}
-	if c.fonts[0] != 0 {
-		return true
-	}
-	c.fonts = [fontCount]uintptr{
-		mkFont("Courier New", 22, true),
-		mkFont("Segoe UI", 16, false),
-		mkFont("Segoe UI", 13, false),
-		mkFont("Courier New", 14, true),
-	}
+	c.cv = &canvas{w: w, h: h, px: unsafe.Slice((*uint32)(bits), w*h), f: 1}
 	return true
+}
+
+// useFonts создаёт шрифты под масштаб f.
+func (c *uiCtl) useFonts(f float64) {
+	if c.fonts[0] != 0 && c.fontF == f {
+		return
+	}
+	for _, h := range c.fonts {
+		if h != 0 {
+			pDeleteObject.Call(h)
+		}
+	}
+	sz := func(v float64) int { return int(v*f + 0.5) }
+	c.fonts = [fontCount]uintptr{
+		mkFont("Courier New", sz(22), true),
+		mkFont("Segoe UI", sz(16), false),
+		mkFont("Segoe UI", sz(13), false),
+		mkFont("Courier New", sz(14), true),
+	}
+	c.fontF = f
 }
 
 func (c *uiCtl) paint(hwnd uintptr) {
@@ -587,25 +595,25 @@ func (c *uiCtl) paint(hwnd uintptr) {
 	defer pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 	var cr rect
 	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&cr)))
-	cw, ch := max(cr.R, 1), max(cr.B, 1)
-	s := max(1, min(cw/panelW, ch/panelH))
-	bw, bh := max(cw/s, panelW), max(ch/s, panelH)
-	if !c.ensureSurface(hdc, int(bw), int(bh)) {
+	cw, ch := max(cr.R, panelW), max(cr.B, panelH)
+	if !c.ensureSurface(hdc, int(cw), int(ch)) {
 		return
 	}
-	c.drawS = s
+	f := min(float64(cw)/panelW, float64(ch)*0.94/panelH)
+	f = max(1, float64(int(f*8))/8)
+	c.cv.f = f
+	c.useFonts(f)
 	c.mu.Lock()
 	st := c.st
 	c.mu.Unlock()
 	var cp point
 	pGetCursorPos.Call(uintptr(unsafe.Pointer(&cp)))
 	pScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&cp)))
-	cp.X, cp.Y = cp.X/s-c.ox, cp.Y/s-c.oy
+	cp = c.cv.toPanel(cp.X, cp.Y)
 
 	pGdiFlush.Call()
 	hits, texts := paintPanel(c.cv, st, cp, c.frame/4%2 == 0)
 	c.hits = hits
-	c.ox, c.oy = int32(c.cv.ox), int32(c.cv.oy)
 	for _, t := range texts {
 		col := cPaper
 		if t.ink {
@@ -614,20 +622,11 @@ func (c *uiCtl) paint(hwnd uintptr) {
 		pSelectObject.Call(c.memDC, c.fonts[t.font])
 		pSetTextColor.Call(c.memDC, colorRef(col))
 		u, _ := syscall.UTF16FromString(t.s)
-		r := rect{t.r.L + c.ox, t.r.T + c.oy, t.r.R + c.ox, t.r.B + c.oy}
+		r := c.cv.devRect(t.r)
 		pDrawText.Call(c.memDC, uintptr(unsafe.Pointer(&u[0])), uintptr(len(u)-1), uintptr(unsafe.Pointer(&r)), uintptr(t.flags))
 	}
 	pGdiFlush.Call()
-	pSetStretchBltMode.Call(hdc, 3) // COLORONCOLOR
-	pStretchBlt.Call(hdc, 0, 0, uintptr(bw*s), uintptr(bh*s), c.memDC, 0, 0, uintptr(bw), uintptr(bh), 0x00CC0020)
-	if bw*s < cw {
-		r := rect{bw * s, 0, cw, ch}
-		pFillRect.Call(hdc, uintptr(unsafe.Pointer(&r)), c.inkBr)
-	}
-	if bh*s < ch {
-		r := rect{0, bh * s, cw, ch}
-		pFillRect.Call(hdc, uintptr(unsafe.Pointer(&r)), c.inkBr)
-	}
+	pBitBlt.Call(hdc, 0, 0, uintptr(cw), uintptr(ch), c.memDC, 0, 0, 0x00CC0020)
 }
 
 // ---------- меню в трее ----------

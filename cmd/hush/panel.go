@@ -114,47 +114,55 @@ const (
 	cPaper uint32 = 0xded8ca
 )
 
+// canvas — буфер пикселей; рисование идёт в координатах панели, f — масштаб, ox/oy — сдвиг колонки.
 type canvas struct {
 	w, h   int
 	px     []uint32
-	ox, oy int // где на холсте стоит колонка панели
+	f      float64
+	ox, oy int
 }
 
-func newCanvas(w, h int) *canvas { return &canvas{w: w, h: h, px: make([]uint32, w*h)} }
+func newCanvas(w, h int) *canvas { return &canvas{w: w, h: h, px: make([]uint32, w*h), f: 1} }
 
-func (c *canvas) set(x, y int, col uint32) {
-	x, y = x+c.ox, y+c.oy
-	if x >= 0 && y >= 0 && x < c.w && y < c.h {
-		c.px[y*c.w+x] = col
-	}
+func (c *canvas) dev(v int32) int { return int(float64(v)*c.f + 0.5) }
+
+// devRect переводит прямоугольник панели в пиксели холста.
+func (c *canvas) devRect(r rect) rect {
+	return rect{int32(c.ox + c.dev(r.L)), int32(c.oy + c.dev(r.T)), int32(c.ox + c.dev(r.R)), int32(c.oy + c.dev(r.B))}
 }
 
-func (c *canvas) fill(r rect, col uint32) {
-	for y := int(r.T); y < int(r.B); y++ {
-		for x := int(r.L); x < int(r.R); x++ {
-			c.set(x, y, col)
+func (c *canvas) toPanel(x, y int32) point {
+	return point{int32(float64(int(x)-c.ox) / c.f), int32(float64(int(y)-c.oy) / c.f)}
+}
+
+func (c *canvas) fillDev(r rect, col uint32) {
+	x0, y0, x1, y1 := max(0, int(r.L)), max(0, int(r.T)), min(c.w, int(r.R)), min(c.h, int(r.B))
+	for y := y0; y < y1; y++ {
+		row := c.px[y*c.w : (y+1)*c.w]
+		for x := x0; x < x1; x++ {
+			row[x] = col
 		}
 	}
 }
 
+func (c *canvas) set(x, y int, col uint32) {
+	c.fillDev(c.devRect(rect{int32(x), int32(y), int32(x + 1), int32(y + 1)}), col)
+}
+
+func (c *canvas) fill(r rect, col uint32) { c.fillDev(c.devRect(r), col) }
+
 func (c *canvas) frame(r rect, col uint32) {
-	for x := int(r.L); x < int(r.R); x++ {
-		c.set(x, int(r.T), col)
-		c.set(x, int(r.B)-1, col)
-	}
-	for y := int(r.T); y < int(r.B); y++ {
-		c.set(int(r.L), y, col)
-		c.set(int(r.R)-1, y, col)
-	}
+	c.fill(rect{r.L, r.T, r.R, r.T + 1}, col)
+	c.fill(rect{r.L, r.B - 1, r.R, r.B}, col)
+	c.fill(rect{r.L, r.T, r.L + 1, r.B}, col)
+	c.fill(rect{r.R - 1, r.T, r.R, r.B}, col)
 }
 
 // dots — точечная заливка, как узор --dots в Gust.
 func (c *canvas) dots(r rect, col uint32) {
-	for y := int(r.T); y < int(r.B); y++ {
-		for x := int(r.L); x < int(r.R); x++ {
-			if x%2 == 0 && y%2 == 0 {
-				c.set(x, y, col)
-			}
+	for y := r.T; y < r.B; y += 2 {
+		for x := r.L; x < r.R; x += 2 {
+			c.set(int(x), int(y), col)
 		}
 	}
 }
@@ -255,8 +263,12 @@ func paintPanel(c *canvas, st uiState, hov point, blink bool) ([]hitBox, []textO
 	text := func(r rect, s string, ink bool, font int, flags uint32) {
 		texts = append(texts, textOp{r, s, ink, font, flags | dtSingle})
 	}
-	c.ox, c.oy = 0, max(0, (c.h-panelH)/2)
-	if extra := c.w - panelW; extra > 0 {
+	if c.f <= 0 {
+		c.f = 1
+	}
+	pw, ph := c.dev(panelW), c.dev(panelH)
+	c.ox, c.oy = 0, max(0, (c.h-ph)/2)
+	if extra := c.w - pw; extra > 0 {
 		c.ox = min(extra, c.w/25)
 	}
 	c.scene()
