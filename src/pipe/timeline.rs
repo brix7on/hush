@@ -91,6 +91,9 @@ struct SiInner {
     delay: i64,
     tl: Vec<Arc<Timeline>>,
     resyncs: usize,
+    lag: f64,
+    old_lag: f64,
+    jump_at: i64,
 }
 
 // пакеты одного устройства (уже 48 кГц) на общей шкале
@@ -113,7 +116,7 @@ impl StreamIn {
             t0,
             tol: RATE as i64 * 40 / 1000,
             size,
-            m: Mutex::new(SiInner { delay, tl: Vec::new(), resyncs: 0 }),
+            m: Mutex::new(SiInner { delay, tl: Vec::new(), resyncs: 0, lag: 0.0, old_lag: 0.0, jump_at: i64::MIN }),
         }
     }
 
@@ -177,8 +180,31 @@ impl StreamIn {
         m.tl.clone()
     }
 
-    fn bump(&self) {
-        self.m.lock().unwrap().resyncs += 1;
+    // отставание шкалы от меток времени в точке idx, отсчётов
+    pub fn lag_at(&self, idx: i64) -> i64 {
+        let m = self.m.lock().unwrap();
+        let v = if idx < m.jump_at { m.old_lag } else { m.lag };
+        v.round() as i64
+    }
+
+    fn track(&self, diff: i64, end: i64) {
+        let mut m = self.m.lock().unwrap();
+        let d = diff as f64;
+        if (d - m.lag).abs() > (RATE / 200) as f64 {
+            m.old_lag = m.lag;
+            m.lag = d;
+            m.jump_at = end;
+        } else {
+            m.lag += 0.02 * (d - m.lag);
+        }
+    }
+
+    fn rebase(&self, at: i64) {
+        let mut m = self.m.lock().unwrap();
+        m.resyncs += 1;
+        m.old_lag = m.lag;
+        m.lag = 0.0;
+        m.jump_at = at;
     }
 
     // pkt[c] — отсчёты канала c, все одной длины; qpc — метка начала пакета (0 — неизвестна)
@@ -198,14 +224,16 @@ impl StreamIn {
                     let diff = pi - end;
                     if diff > self.tol {
                         tl.iter().for_each(|t| t.pad_to(pi));
-                        self.bump();
+                        self.rebase(pi);
                     } else if diff < -self.tol {
                         let drop = (-diff) as usize;
                         if drop >= pkt[0].len() {
                             return;
                         }
                         skip = drop;
-                        self.bump();
+                        self.rebase(end);
+                    } else {
+                        self.track(diff, end);
                     }
                 }
             }

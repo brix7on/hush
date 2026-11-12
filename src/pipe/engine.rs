@@ -99,11 +99,15 @@ impl Engine {
             if mic_end < s + b {
                 return;
             }
+            // опора читается со сдвигом: шкалы микрофона и наушников уходят от меток времени по-разному
+            let lm = self.mic.lag_at(s);
+            let max_off = RATE as i64 * 80 / 1000;
+            let rs = s + (lm - self.reff.lag_at(s)).clamp(-max_off, max_off);
             let ref_end = self.reff.end();
-            if ref_end.map_or(true, |e| e < s + b) {
+            if ref_end.map_or(true, |e| e < rs + b) {
                 let alive = self.ref_stale <= 0
                     || ref_end.is_some_and(|e| now_idx - (e - self.reff.cur_delay()) <= self.ref_stale);
-                if alive && now_idx < s + b + self.hold {
+                if alive && now_idx < s + lm + b + self.hold {
                     self.waited += 1;
                     if self.wait_from == 0 {
                         self.wait_from = now_idx;
@@ -124,7 +128,7 @@ impl Engine {
             }
             self.mic.read_at(0, s, &mut self.mb);
             for (k, rb) in self.rbs.iter_mut().enumerate() {
-                self.reff.read_at(k, s, rb);
+                self.reff.read_at(k, rs, rb);
             }
             {
                 let mut ch = self.chain.lock().unwrap();

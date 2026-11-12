@@ -206,3 +206,77 @@ fn sink_low_latency() {
         }
     }
 }
+
+#[test]
+fn engine_with_clock_drift() {
+    for ppm in [1000.0, -1000.0] {
+        clock_drift(ppm);
+    }
+}
+
+fn clock_drift(ppm: f64) {
+    let mut r = Rng(23);
+    let (cal_n, run_n) = (8 * RATE, 72 * RATE);
+    let n = cal_n + run_n;
+    let mut rf = vec![0.0; n];
+    for (i, v) in rf.iter_mut().enumerate().take(cal_n - RATE).skip(RATE) {
+        if (i * 1000 / RATE) % 800 < 400 {
+            *v = 0.05 * r.norm();
+        }
+    }
+    // резкие короткие звуки: на них сдвиг шкал заметнее всего
+    let mut amp = 0.0;
+    for (i, v) in rf.iter_mut().enumerate().skip(cal_n) {
+        if i % (RATE / 5) == 0 {
+            amp = 0.05 + 0.25 * r.u();
+        }
+        if i % (RATE / 5) < RATE * 40 / 1000 {
+            *v = amp * r.norm();
+        }
+    }
+    let leak = env_leak(&rf, 30 * RATE / 1000, 0.02, &mut r);
+    let mic: Vec<f64> = leak.iter().map(|l| l + 0.0003 * r.norm()).collect();
+
+    let mic_s = Arc::new(StreamIn::new(RATE * 2, 0, 0));
+    let ref_s = Arc::new(StreamIn::new(RATE * 2, 0, 0));
+    let sup = Suppressor::new(RATE);
+    let sh = sup.shared();
+    sh.set_auto_learn(false);
+    let shp = sup.h;
+    let ch = chain(sup);
+    ch.lock().unwrap().dn.ctl().set_strength(0);
+    let mut eng = Engine::new(mic_s.clone(), ref_s.clone(), ch, 1);
+    let stamp = |a: usize| a as i64 * 10_000_000 / RATE as i64 + 1;
+    let mut out = Vec::new();
+    let mut cal_started = false;
+    let step = 480.0 * (1.0 + ppm * 1e-6);
+    let mut mt = 0.0f64;
+    let from = cal_n + 4 * RATE;
+    let (mut e_in, mut out_from) = (0.0, 0usize);
+    let mut a = 0;
+    while a + 480 <= n {
+        let l: Vec<f32> = rf[a..a + 480].iter().map(|&v| v as f32).collect();
+        ref_s.push(&[l], stamp(a));
+        while mt + step <= (a + 480) as f64 {
+            let p = mt as usize;
+            let m: Vec<f32> = mic[p..p + 480].iter().map(|&v| v as f32).collect();
+            if p >= from {
+                e_in += m.iter().map(|&v| v as f64 * v as f64).sum::<f64>();
+            } else {
+                out_from = out.len();
+            }
+            mic_s.push(&[m], stamp(p));
+            mt += step;
+        }
+        if !cal_started && a >= RATE / 2 {
+            sh.start_calib((cal_n - RATE) / shp);
+            cal_started = true;
+        }
+        eng.step((a + 480) as i64, &mut out);
+        a += 480;
+    }
+    let e_out: f64 = out[out_from..].iter().map(|&v| v as f64 * v as f64).sum();
+    let red = 10.0 * (e_in / e_out).log10();
+    eprintln!("drift {ppm:+.0} ppm: reduction {red:.1} dB");
+    assert!(red >= 9.0);
+}
