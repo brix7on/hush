@@ -68,6 +68,10 @@ pub struct UiState {
     pub upd_latest: String,
     pub upd_msg: String,
     pub upd_busy: bool,
+    pub settings: bool,
+    pub autostart: bool,
+    pub idle_sleep: bool,
+    pub idle_min: i64,
 }
 
 // просьба интерфейса к основной программе
@@ -409,9 +413,9 @@ pub fn paint_panel(c: &mut Canvas, st: &UiState, hov: Point, blink: bool) -> (Ve
     p.c.panel_box(rc(16, 14, 364, 52));
     p.text(rc(28, 14, 240, 52), "H U S H", false, FONT_TITLE, DT_VCENTER);
     if st.upd_busy {
-        p.text(rc(180, 14, 352, 52), st.upd_msg.clone(), false, FONT_SMALL, DT_VCENTER | DT_RIGHT);
+        p.text(rc(150, 14, 320, 52), st.upd_msg.clone(), false, FONT_SMALL, DT_VCENTER | DT_RIGHT);
     } else if !st.upd_latest.is_empty() {
-        let r = rc(212, 20, 356, 46);
+        let r = rc(180, 20, 324, 46);
         let hot = r.has(hov);
         p.c.fill(r, C_PAPER);
         if hot {
@@ -431,8 +435,9 @@ pub fn paint_panel(c: &mut Canvas, st: &UiState, hov: Point, blink: bool) -> (Ve
         p.text(r, label, !hot, FONT_SMALL, DT_VCENTER | DT_CENTER);
         p.hits.push(HitBox { r, act: act("update", 0.0) });
     } else {
-        p.text(rc(200, 14, 352, 52), VERSION, false, FONT_SMALL, DT_VCENTER | DT_RIGHT);
+        p.text(rc(200, 14, 320, 52), VERSION, false, FONT_SMALL, DT_VCENTER | DT_RIGHT);
     }
+    p.button(rc(330, 20, 356, 46), "gear", "", act("settings", 0.0), st.settings, l("Настройки", "Settings"));
 
     // состояние
     p.c.panel_box(rc(16, 60, 364, 96));
@@ -613,6 +618,10 @@ pub fn paint_panel(c: &mut Canvas, st: &UiState, hov: Point, blink: bool) -> (Ve
     p.button(rc(16, 542, 188, 568), "calib", l("Калибровка", "Calibrate"), act("recal", 0.0), false, l("Заново измерить наводку", "Measure the bleed again"));
     p.button(rc(192, 542, 364, 568), "tray", l("Свернуть", "Hide"), act("hidepanel", 0.0), false, l("Свернуть в трей", "Hide to tray"));
 
+    if st.settings {
+        settings_pane(&mut p, st);
+    }
+
     // строка подсказки
     if !p.tip.is_empty() {
         let tip = p.tip.clone();
@@ -632,6 +641,51 @@ pub fn paint_panel(c: &mut Canvas, st: &UiState, hov: Point, blink: bool) -> (Ve
         }
     }
     (p.hits, p.texts)
+}
+
+// настройки справа, поверх фона
+fn settings_pane(p: &mut Painter, st: &UiState) {
+    let ru = crate::lang::is_ru();
+    let (x0, x1) = (372, 584);
+    p.c.panel_box(rc(x0, 14, x1, 52));
+    p.text(rc(x0 + 12, 14, x1 - 12, 52), l("Настройки", "Settings"), false, FONT_BODY, DT_VCENTER);
+    p.c.panel_box(rc(x0, 60, x1, 350));
+    let row = |i: i32, group: i32| {
+        let y = 72 + i * 32 + group * 8;
+        rc(x0 + 12, y, x1 - 12, y + 26)
+    };
+
+    let devs = [
+        ("mic", &st.mic, l("Микрофон", "Microphone"), l("по умолчанию", "default")),
+        ("phones", &st.reff, l("Наушники", "Headphones"), l("по умолчанию", "default")),
+        ("plug", &st.out, l("Вывод", "Output"), l("не выбран", "not set")),
+    ];
+    for (i, (ic, name, title, empty)) in devs.into_iter().enumerate() {
+        let shown = if name.is_empty() { empty } else { name.as_str() };
+        let tip = format!("{title}: {shown}");
+        p.button(row(i as i32, 0), ic, shown, act("devmenu", i as f64), false, &tip);
+    }
+
+    p.button(row(3, 1), "", l("Автозапуск", "Autostart"), act("autostart", 0.0), st.autostart, l("Запускать hush вместе с Windows", "Start hush with Windows"));
+    let sleep_tip = if ru {
+        format!("ПК уснёт после {} мин тишины без мыши и клавиатуры", st.idle_min)
+    } else {
+        format!("The PC sleeps after {} min of silence and no input", st.idle_min)
+    };
+    p.button(row(4, 1), "", l("Сон при тишине", "Sleep on silence"), act("idlesleep", 0.0), st.idle_sleep, &sleep_tip);
+
+    p.button(row(5, 2), "", l("Журнал", "Log"), act("log", 0.0), false, l("Открыть журнал", "Open the log"));
+    if st.upd_busy {
+        let r = row(6, 2);
+        p.c.frame(r, C_PAPER);
+        p.text(r, st.upd_msg.clone(), false, FONT_SMALL, DT_VCENTER | DT_CENTER | DT_ELLIPSIS);
+    } else if !st.upd_latest.is_empty() {
+        let label = if ru { format!("Обновить до {}", st.upd_latest) } else { format!("Update to {}", st.upd_latest) };
+        p.button(row(6, 2), "", &label, act("update", 0.0), false, l("Скачать и установить, hush перезапустится", "Download and install, hush will restart"));
+    } else {
+        p.button(row(6, 2), "", l("Проверить обновления", "Check for updates"), act("checkupd", 0.0), false, l("Проверить обновления", "Check for updates"));
+    }
+    p.button(row(7, 2), "", l("Выход", "Quit"), act("quit", 0.0), false, l("Закрыть hush", "Quit hush"));
 }
 
 // значок в трее: 0 — работает, 1 — калибровка, 2 — нет звука
@@ -678,6 +732,24 @@ mod tests {
         }
         assert!(scene_mask().iter().filter(|&&v| v).count() > 1000);
     }
+
+    #[test]
+    fn settings_pane_hits() {
+        let mut st = UiState { running: true, found: true, ..Default::default() };
+        let mut px = vec![0u32; (PANEL_W * PANEL_H) as usize];
+        let kinds = |st: &UiState, px: &mut [u32]| -> Vec<&'static str> {
+            let mut c = Canvas::new(PANEL_W, PANEL_H, px);
+            paint_panel(&mut c, st, Point { x: -1, y: -1 }, false).0.iter().map(|h| h.act.kind).collect()
+        };
+        let closed = kinds(&st, &mut px);
+        assert!(closed.contains(&"settings") && !closed.contains(&"devmenu"));
+        st.settings = true;
+        let open = kinds(&st, &mut px);
+        for k in ["devmenu", "autostart", "idlesleep", "log", "checkupd", "quit"] {
+            assert!(open.contains(&k), "{k}");
+        }
+        assert_eq!(open.iter().filter(|&&k| k == "devmenu").count(), 3);
+    }
 }
 
 #[cfg(test)]
@@ -693,7 +765,8 @@ mod preview {
             running: true, found: true, voice: true, mic_db: -28.0, ref_db: -22.0, out_db: -18.0, reduction: 9.4,
             gain_db: 6.0, beta: 1.5, noise: 2, eq: 1, agc: true, agc_gain: 4.0, ptt: 1, ptt_key: "Mouse 5".into(),
             ptt_open: true, cue: true, latency_ms: 28, excl_want: true, excl_on: true, mic_period_ms: 10.0,
-            mic: "Headset".into(), out: "CABLE Input".into(), ..Default::default()
+            mic: "Headset".into(), out: "CABLE Input".into(), settings: std::env::var("HUSH_PREVIEW_SETTINGS").is_ok(), idle_min: 15,
+            idle_sleep: true, ..Default::default()
         };
         let mut px = vec![0u32; (PANEL_W * PANEL_H) as usize];
         let mut c = Canvas::new(PANEL_W, PANEL_H, &mut px);

@@ -27,6 +27,7 @@ const WM_QUIT_UI: u32 = WM_USER + 2;
 pub type GetState = Box<dyn Fn() -> UiState + Send>;
 
 static PANEL_VIS: AtomicBool = AtomicBool::new(false);
+static SETTINGS: AtomicBool = AtomicBool::new(false);
 
 struct Ui {
     get: GetState,
@@ -294,6 +295,10 @@ fn do_action(a: Action) {
     match a.kind {
         "hidepanel" => show_panel(false),
         "panel" => show_panel(true),
+        "settings" => {
+            SETTINGS.fetch_xor(true, Relaxed);
+        }
+        "devmenu" => dev_popup(a.f as i32),
         "beta" => send(act("beta", [1.0, 1.5, 2.0][(a.f as usize).min(2)])),
         _ => send(a),
     }
@@ -514,6 +519,12 @@ fn paint(h: HWND) {
             cv.f = f;
             // сдвиг панели известен только после отрисовки: курсор пересчитывается по прошлому кадру
             let hov = Point { x: ((cp.x - u.ox) as f64 / f) as i32, y: ((cp.y - u.oy) as f64 / f) as i32 };
+            u.st.settings = SETTINGS.load(Relaxed);
+            if u.st.settings {
+                u.st.autostart = autostart_on();
+                u.st.idle_sleep = G.idle_sleep_on.load(Relaxed);
+                u.st.idle_min = super::app::idle_sleep_min();
+            }
             let (hits, texts) = paint_panel(&mut cv, &u.st, hov, u.frame / 4 % 2 == 0);
             let texts: Vec<(Rect, TextOp)> = texts.into_iter().map(|t| (cv.dev_rect(t.r), t)).collect();
             u.f = cv.f;
@@ -570,6 +581,10 @@ impl Menu {
     }
     fn devices(&mut self, title: &str, flow: EDataFlow, kind: &'static str, cur: &str, with_default: bool) {
         let m = unsafe { CreatePopupMenu().unwrap_or_default() };
+        self.dev_items(m, flow, kind, cur, with_default);
+        self.sub(title, m);
+    }
+    fn dev_items(&mut self, m: HMENU, flow: EDataFlow, kind: &'static str, cur: &str, with_default: bool) {
         if with_default {
             self.add(m, l("По умолчанию в Windows", "Windows default"), Action { kind, s: String::new(), f: 0.0 }, cur.is_empty());
         }
@@ -577,8 +592,37 @@ impl Menu {
             let on = !cur.is_empty() && contains_fold(&n, cur);
             self.add(m, &n, Action { kind, s: n.clone(), f: 0.0 }, on);
         }
-        self.sub(title, m);
     }
+    // показывает меню у курсора и выполняет выбранное
+    fn track(self, h: HWND, bottom: bool) {
+        unsafe {
+            let mut pt = POINT::default();
+            let _ = GetCursorPos(&mut pt);
+            let _ = SetForegroundWindow(h);
+            let flags = if bottom { TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN } else { TPM_RETURNCMD | TPM_RIGHTBUTTON };
+            let r = TrackPopupMenu(self.h, flags, pt.x, pt.y, None, h, None);
+            let _ = PostMessageW(Some(h), WM_NULL, WPARAM(0), LPARAM(0));
+            let _ = DestroyMenu(self.h);
+            if r.0 != 0 {
+                if let Some((_, a)) = self.acts.into_iter().find(|(id, _)| *id == r.0 as u32) {
+                    do_action(a);
+                }
+            }
+        }
+    }
+}
+
+// список устройств по кнопке в настройках: 0 — микрофон, 1 — наушники, 2 — вывод
+fn dev_popup(which: i32) {
+    let Some((h, st)) = with(|u| (u.hwnd, (u.get)())) else { return };
+    let hm = unsafe { CreatePopupMenu().unwrap_or_default() };
+    let mut m = Menu { h: hm, acts: Vec::new(), id: 100 };
+    match which {
+        0 => m.dev_items(hm, eCapture, "mic", &st.mic, true),
+        1 => m.dev_items(hm, eRender, "ref", &st.reff, true),
+        _ => m.dev_items(hm, eRender, "out", &st.out, false),
+    }
+    m.track(h, false);
 }
 
 fn popup(h: HWND) {
@@ -624,17 +668,5 @@ fn popup(h: HWND) {
     m.sep(hm);
     m.add(hm, l("Выход", "Quit"), act("quit", 0.0), false);
 
-    unsafe {
-        let mut pt = POINT::default();
-        let _ = GetCursorPos(&mut pt);
-        let _ = SetForegroundWindow(h);
-        let r = TrackPopupMenu(hm, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, None, h, None);
-        let _ = PostMessageW(Some(h), WM_NULL, WPARAM(0), LPARAM(0));
-        let _ = DestroyMenu(hm);
-        if r.0 != 0 {
-            if let Some((_, a)) = m.acts.into_iter().find(|(id, _)| *id == r.0 as u32) {
-                do_action(a);
-            }
-        }
-    }
+    m.track(h, true);
 }
