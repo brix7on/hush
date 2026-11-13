@@ -22,8 +22,10 @@ const SUP_EDGES: [f64; 26] = [
 ];
 
 const AUTO_BUF: usize = 2400;
-const AUTO_EVERY: usize = 940;
+const AUTO_EVERY: usize = 375;
+const AUTO_RECENT: usize = 1100;
 const AUTO_MIN: usize = 900;
+const AUTO_SWITCH: f64 = 1.5;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Calib {
@@ -171,6 +173,7 @@ impl SupShared {
 struct AutoLearn {
     m: Vec<Vec<f64>>,
     s: Vec<Vec<f64>>,
+    r: Vec<Vec<f64>>,
     ok: Vec<bool>,
     lv: Vec<f64>,
     pos: usize,
@@ -298,6 +301,7 @@ impl Suppressor {
             auto: AutoLearn {
                 m: vec![vec![0.0; nb]; AUTO_BUF],
                 s: vec![vec![0.0; nb]; AUTO_BUF],
+                r: vec![vec![0.0; nb]; AUTO_BUF],
                 ok: vec![false; AUTO_BUF],
                 lv: vec![0.0; AUTO_BUF],
                 pos: 0,
@@ -562,6 +566,7 @@ impl Suppressor {
         let a = &mut self.auto;
         a.m[a.pos].copy_from_slice(&self.mb);
         a.s[a.pos].copy_from_slice(&self.s);
+        a.r[a.pos].copy_from_slice(&self.rb);
         a.ok[a.pos] = usable;
         a.lv[a.pos] = lv;
         a.pos = (a.pos + 1) % AUTO_BUF;
@@ -573,7 +578,7 @@ impl Suppressor {
             return;
         }
         let cnt = a.ok[..a.n].iter().filter(|&&v| v).count();
-        if cnt < AUTO_MIN {
+        if cnt < if cur.found { AUTO_MIN } else { AUTO_MIN / 2 } {
             return;
         }
         a.since = 0;
@@ -581,35 +586,30 @@ impl Suppressor {
         let start = (a.pos + AUTO_BUF - n) % AUTO_BUF;
         let mut m = Vec::with_capacity(n);
         let mut sv = Vec::with_capacity(n);
+        let mut rv = Vec::with_capacity(n);
         let mut ok = Vec::with_capacity(n);
         let mut lvs = Vec::new();
         for i in 0..n {
             let j = (start + i) % AUTO_BUF;
             m.push(a.m[j].clone());
             sv.push(a.s[j].clone());
+            rv.push(a.r[j].clone());
             ok.push(a.ok[j]);
             if a.ok[j] {
                 lvs.push(a.lv[j]);
             }
         }
-        // голос заметно громче наводки: громкие кадры не берём
+        // голос заметно громче наводки: для поиска задержки громкие кадры не берём
         let gate = pctl(&lvs, 0.2) + 15.0;
-        for i in 0..n {
-            if ok[i] && a.lv[(start + i) % AUTO_BUF] > gate {
-                ok[i] = false;
-            }
-        }
-        let (cur_d, cur_found) = (cur.d, cur.found);
+        let quiet: Vec<bool> = (0..n).map(|i| ok[i] && a.lv[(start + i) % AUTO_BUF] <= gate).collect();
+        let cur = cur.clone();
         let (rate, nb) = (self.rate, self.nb);
         let sh = self.sh.clone();
         sh.auto_busy.store(true, Ordering::Release);
         std::thread::spawn(move || {
-            let (c, mut cur_corr) = solve_model(rate, nb, &m, &sv, &ok, cur_d);
+            let (c, gain) = solve_model(rate, nb, &m, &sv, &rv, &ok, &quiet, &cur);
             if c.found {
-                if !cur_found {
-                    cur_corr = -1.0;
-                }
-                sh.m.lock().unwrap().pending = Some((c, cur_corr));
+                sh.m.lock().unwrap().pending = Some((c, gain));
             }
             sh.auto_busy.store(false, Ordering::Release);
         });
@@ -621,16 +621,14 @@ impl Suppressor {
     }
 }
 
-fn apply_auto(l: &mut Locked, mut c: Calib, cur_corr: f64) {
-    if !l.cal.found || c.corr > cur_corr + 0.05 {
+// gain — во сколько раз новая модель точнее текущей на свежих данных
+fn apply_auto(l: &mut Locked, mut c: Calib, gain: f64) {
+    if !l.cal.found || gain > AUTO_SWITCH {
         c.w0 = c.w.clone();
         l.w0 = c.w.clone();
         l.d0 = c.d;
         l.cal = c;
         l.adapted = true;
-    } else if c.d == l.cal.d {
-        l.w0 = c.w.clone();
-        l.cal.w0 = c.w;
     }
 }
 
@@ -726,69 +724,159 @@ fn solve_calib(rate: usize, nb: usize, cm: &[Vec<f64>], cs: &[Vec<f64>]) -> Cali
     c
 }
 
+// подбор модели по обычному звуку: задержка по резким изменениям, уровни — регрессией без кадров с голосом
+#[allow(clippy::too_many_arguments)]
 fn solve_model(
     rate: usize,
     nb: usize,
     m: &[Vec<f64>],
     sv: &[Vec<f64>],
+    rv: &[Vec<f64>],
     ok: &[bool],
-    cur_d: usize,
+    quiet: &[bool],
+    cur: &Calib,
 ) -> (Calib, f64) {
     let mut c = Calib { rate, w: vec![0.0; nb], ..Default::default() };
-    let idx: Vec<usize> = (SUP_MAX_D..m.len()).filter(|&t| ok[t]).collect();
-    if idx.len() < AUTO_MIN / 2 {
+    let idx: Vec<usize> = (SUP_MAX_D..m.len()).filter(|&t| quiet[t]).collect();
+    if idx.len() < AUTO_MIN / 4 {
         return (c, 0.0);
     }
+
+    // задержка
     let lm: Vec<Vec<f64>> = (0..nb).map(|b| m.iter().map(|r| lg(r[b])).collect()).collect();
-    let ls: Vec<Vec<f64>> = (0..nb).map(|b| sv.iter().map(|r| lg(r[b])).collect()).collect();
+    let lr: Vec<Vec<f64>> = (0..nb).map(|b| rv.iter().map(|r| lg(r[b])).collect()).collect();
     let mut x = vec![0.0; idx.len()];
     let mut y = vec![0.0; idx.len()];
-    let mut corr_at = |d: usize| -> f64 {
+    let (mut best_d, mut best_c) = (0usize, -1.0f64);
+    for d in 0..SUP_MAX_D {
         let mut sum = 0.0;
         for b in 1..nb {
             for (i, &t) in idx.iter().enumerate() {
                 x[i] = lm[b][t];
-                y[i] = ls[b][t - d];
+                y[i] = lr[b][t - d];
             }
             sum += corr_f(&x, &y);
         }
-        sum / (nb - 1) as f64
-    };
-    let (mut best_d, mut best_c) = (0usize, -1.0f64);
-    for d in 0..SUP_MAX_D {
-        let v = corr_at(d);
+        let v = sum / (nb - 1) as f64;
         if v > best_c {
             best_c = v;
             best_d = d;
         }
     }
-    let cur = corr_at(cur_d.min(SUP_MAX_D));
     c.d = best_d;
     c.corr = best_c;
+
+    // кадры без голоса: микрофон не громче, чем объясняет опора
+    // уровни — по свежей части записи, чтобы быстро замечать сдвиг гарнитуры
+    let mut all: Vec<usize> = (SUP_MAX_D..m.len()).filter(|&t| ok[t]).collect();
+    let recent = all.iter().filter(|&&t| t + AUTO_RECENT >= m.len()).count();
+    if recent >= AUTO_MIN / 2 {
+        all.retain(|&t| t + AUTO_RECENT >= m.len());
+    }
+    let tot = |r: &Vec<f64>| r[1..].iter().sum::<f64>();
+    let q: Vec<f64> = all.iter().map(|&t| tot(&m[t]) / (tot(&sv[t - best_d]) + 1e-20)).collect();
+    let qlim = pctl(&q, 0.3) * 4.0;
+    let mut keep: Vec<usize> = all.iter().zip(&q).filter(|(_, &v)| v <= qlim).map(|(&t, _)| t).collect();
+    let mut nf = vec![0.0; nb];
+    for pass in 0..3 {
+        if keep.len() < AUTO_MIN / 6 {
+            return (c, 0.0);
+        }
+        for b in 0..nb {
+            let (w, n) = fit_band(m, sv, &keep, best_d, b);
+            c.w[b] = w;
+            nf[b] = n;
+        }
+        if pass == 2 {
+            break;
+        }
+        keep.retain(|&t| {
+            let pred: f64 = (1..nb).map(|b| c.w[b] * sv[t - best_d][b] + nf[b]).sum();
+            tot(&m[t]) <= 3.0 * pred
+        });
+    }
+
+    // проверка на кадрах, не участвовавших в подборе: две половины по очереди
+    let chunk = (keep.len() / 4).max(1);
+    let half = |k: usize| -> Vec<usize> { keep.iter().enumerate().filter(|(i, _)| (i / chunk) % 2 == k).map(|(_, &t)| t).collect() };
+    let parts = [half(0), half(1)];
+    let err = |w: &[f64], n: &[f64], d: usize, on: &[usize]| -> f64 {
+        let mut e = 0.0;
+        for &t in on {
+            for b in 1..nb {
+                let v = m[t][b] - n[b] - w[b] * sv[t - d][b];
+                e += v * v;
+            }
+        }
+        e
+    };
+    let cv = |d: usize| -> f64 {
+        let mut e = 0.0;
+        for k in 0..2 {
+            let fit: Vec<(f64, f64)> = (0..nb).map(|b| fit_band(m, sv, &parts[k], d, b)).collect();
+            let w: Vec<f64> = fit.iter().map(|v| v.0).collect();
+            let n: Vec<f64> = fit.iter().map(|v| v.1).collect();
+            e += err(&w, &n, d, &parts[1 - k]);
+        }
+        e
+    };
+    let cur_ok = cur.found && cur.w.len() == nb && cur.d <= SUP_MAX_D;
+    let mut cands = vec![best_d, best_d.saturating_sub(1), (best_d + 1).min(SUP_MAX_D - 1)];
+    if cur_ok {
+        cands.push(cur.d);
+    }
+    cands.dedup();
+    let (mut pick, mut pick_e) = (best_d, f64::INFINITY);
+    for &d in &cands {
+        let e = cv(d);
+        if e < pick_e {
+            pick_e = e;
+            pick = d;
+        }
+    }
+    if pick != best_d {
+        c.d = pick;
+        for b in 0..nb {
+            let (w, n) = fit_band(m, sv, &keep, pick, b);
+            c.w[b] = w;
+            nf[b] = n;
+        }
+    }
+
     let (mut leak_sum, mut nf_sum) = (0.0, 0.0);
-    let mut col = vec![0.0; idx.len()];
     for b in 0..nb {
-        for (i, &t) in idx.iter().enumerate() {
-            col[i] = m[t][b];
+        for &t in &keep {
+            leak_sum += c.w[b] * sv[t - c.d][b];
         }
-        let nf = pctl(&col, 0.15);
-        let (mut num, mut den, mut pred) = (0.0, 0.0, 0.0);
-        for &t in &idx {
-            let xv = sv[t - best_d][b];
-            let yv = (m[t][b] - nf).max(0.0);
-            num += xv * yv;
-            den += xv * xv;
-        }
-        if den > 0.0 {
-            c.w[b] = num / den;
-        }
-        for &t in &idx {
-            pred += c.w[b] * sv[t - best_d][b];
-        }
-        leak_sum += pred;
-        nf_sum += nf * idx.len() as f64;
+        nf_sum += nf[b] * keep.len() as f64;
     }
     c.leak_db = 10.0 * ((leak_sum + nf_sum) / (nf_sum + 1e-20)).log10();
-    c.found = c.corr > 0.3 && c.leak_db > 1.0;
-    (c, cur)
+    // шум модели не может быть заметно выше самых тихих кадров: иначе в подбор попал голос
+    let lows: Vec<f64> = m[SUP_MAX_D..].iter().map(tot).collect();
+    let clean = c.leak_db > 6.0 || nf[1..].iter().sum::<f64>() <= 4.0 * pctl(&lows, 0.1);
+    c.found = c.corr > 0.3 && c.leak_db > if cur_ok { 3.0 } else { 1.0 } && clean;
+    let gain = if cur_ok { err(&cur.w, &nf, cur.d, &keep) / (pick_e + 1e-30) } else { f64::INFINITY };
+    (c, gain)
+}
+
+// m ≈ w·s + n по одной полосе, w и n неотрицательные
+fn fit_band(m: &[Vec<f64>], sv: &[Vec<f64>], keep: &[usize], d: usize, b: usize) -> (f64, f64) {
+    let k = keep.len() as f64;
+    let (mut sx, mut sy, mut sxx, mut sxy) = (0.0, 0.0, 0.0, 0.0);
+    for &t in keep {
+        let (xv, yv) = (sv[t - d][b], m[t][b]);
+        sx += xv;
+        sy += yv;
+        sxx += xv * xv;
+        sxy += xv * yv;
+    }
+    let den = sxx - sx * sx / k;
+    let mut w = if den > 0.0 { (sxy - sx * sy / k) / den } else { 0.0 };
+    w = w.max(0.0);
+    let mut n = (sy - w * sx) / k;
+    if n < 0.0 {
+        n = 0.0;
+        w = if sxx > 0.0 { sxy / sxx } else { 0.0 };
+    }
+    (w, n)
 }
